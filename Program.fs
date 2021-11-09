@@ -1,3 +1,5 @@
+type ResizeMap<'a, 'b> = System.Collections.Generic.Dictionary<'a, 'b>
+
 /// 実行ファイルのディレクトリの絶対パス
 let Location = System.AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')
 /// 対象フォルダ一覧
@@ -13,9 +15,9 @@ type LastupdatedValue = {
     Time: string
 }
 /// 辞書: 最終更新日時
-let LastupdatedDictionary = new System.Collections.Generic.Dictionary<string, LastupdatedValue>()
+let LastupdatedDictionary = new ResizeMap<string, LastupdatedValue>()
 
-/// 絶対パス-GoogleDriveID-最終更新日時
+/// TSVの行を生成する 絶対パス-GoogleDriveID-最終更新日時
 let CreateLastupdatedLine (fileFullPath: string) (googleDriveId: string) : string =
     let time = System.IO.File.GetLastWriteTime(fileFullPath).ToString()
     $"{fileFullPath}\t{googleDriveId}\t{time}"
@@ -24,37 +26,31 @@ module Pattern =
     /// 正規表現における特殊文字をエスケープする
     let private escape (text: string) : string =
         text
-            .Replace("\\", "\\\\")
-            .Replace("/", "\\\\")
-            .Replace(".", "\\.")
-
+            .Replace("""\""", """\\""")
+            .Replace("""/""", """\\""")
+            .Replace(".", """\.""")
     /// パターンにおける特殊文字を正規表現に置換する
     let private replace (text: string) : string =
         text
-            .Replace("*", "[^\\\\]*?")
-
+            .Replace("*", """[^\\]*?""")
     /// パターンを表す正規表現の文字列に変換する
     let private convert (text: string) : string =
-        $"^.*\\\\{text}$" //「^.*\\xx$」
-
+        $"""^.*\\{text}$""" //「^.*\\xx$」
     /// 文字列から正規表現を生成する
     let private regex (text: string) : System.Text.RegularExpressions.Regex =
         System.Text.RegularExpressions.Regex(
             text,
             System.Text.RegularExpressions.RegexOptions.Compiled
         )
-
     /// パターン文字列から正規表現を生成する
     let ToRegex = escape >> replace >> convert >> regex
 
 module Ignore =
     /// 除外ファイルを表す正規表現の一覧
     let private ignoreRegexList = IgnoreList |> Seq.map Pattern.ToRegex
-
     /// regex.f(path) → f path regex
     let private ignoreIsMatch (path: string) (regex: System.Text.RegularExpressions.Regex) =
         regex.IsMatch(path)
-
     /// 除外ファイル一覧に存在するか
     let Has (path: string) =
         (ignoreRegexList |> Seq.tryFind (ignoreIsMatch path)).IsSome
@@ -66,7 +62,6 @@ let PathGetName (path: string) : string =
 
 module Backoff =
     let private randomNumberGenerator = System.Random()
-
     let Exponential (retryCount: int) =
         let currentWaitMilliseconds =
             min
@@ -78,7 +73,6 @@ module Backoff =
 module Http =
     let private client = new System.Net.Http.HttpClient()
     client.Timeout <- System.Threading.Timeout.InfiniteTimeSpan
-
     let Send (request: System.Net.Http.HttpRequestMessage) =
         client.SendAsync(request).Result
 
@@ -91,7 +85,6 @@ module StatusCode =
             System.Net.HttpStatusCode.ServiceUnavailable
             System.Net.HttpStatusCode.GatewayTimeout
         ]
-
     let IsRetry (statusCode: System.Net.HttpStatusCode) : bool =
         retryList |> Set.contains statusCode
 
@@ -101,7 +94,6 @@ module AccessToken =
             "\"access_token\" *: *\"(.*?)\"",
             System.Text.RegularExpressions.RegexOptions.Compiled
         )
-
     let private getExecute () : System.Net.Http.HttpResponseMessage =
         let request =
             new System.Net.Http.HttpRequestMessage(
@@ -130,10 +122,8 @@ module AccessToken =
         // 失敗
         else
             failwith "AccessToken.GetTry"
-
     /// アクセストークン
     let mutable Value : string = GetTry 0
-
     /// アクセストークンを更新する
     let RefreshTry () =
         Value <- GetTry 0
@@ -147,13 +137,11 @@ module GetId =
             )
         request.Headers.Add("Authorization", $"Bearer {AccessToken.Value}")
         Http.Send request
-
     let private regex =
         System.Text.RegularExpressions.Regex(
             "\"ids\" *: *\\[[ \\r\\n]*\"(.*?)\"",
             System.Text.RegularExpressions.RegexOptions.Compiled
         )
-
     let rec Try (retryCount: int) : string =
         let res = execute()
         // 成功
@@ -191,7 +179,6 @@ module Dir =
             )
         request.Headers.Add("Authorization", $"Bearer {AccessToken.Value}")
         Http.Send request
-
     let rec CreateTry (id: string) (parentId: string) (dirFullPath: string) (retryCount: int) : unit =
         let res = create id parentId dirFullPath
         // 成功
@@ -233,7 +220,6 @@ module File =
             )
         request.Headers.Add("Authorization", $"Bearer {AccessToken.Value}")
         Http.Send request
-
     let rec CreateTry (id: string) (parentId: string) (fileFullPath: string) (retryCount: int) : unit =
         let res = create id parentId fileFullPath
         // 成功
@@ -252,7 +238,6 @@ module File =
         // 失敗
         else
             failwith "File.CreateTry"
-
     let private update (id: string) (fileFullPath: string) =
         let metadata =
             new System.Net.Http.StringContent(
@@ -273,7 +258,6 @@ module File =
             )
         request.Headers.Add("Authorization", $"Bearer {AccessToken.Value}")
         Http.Send request
-
     let rec UpdateTry (id: string) (fileFullPath: string) (retryCount: int) : unit =
         let res = update id fileFullPath
         // 成功
@@ -292,7 +276,6 @@ module File =
         // 失敗
         else
             failwith "File.UpdateTry"
-
     let private delete (id: string) =
         let request =
             new System.Net.Http.HttpRequestMessage(
@@ -301,7 +284,6 @@ module File =
             )
         request.Headers.Add("Authorization", $"Bearer {AccessToken.Value}")
         Http.Send request
-
     let rec DeleteTry (id: string) (retryCount: int) : unit =
         let res = delete id
         // 成功
@@ -318,8 +300,11 @@ module File =
             | _ -> Backoff.Exponential retryCount
             DeleteTry id (retryCount + 1)
         // 失敗
+        // - 詳細な失敗の理由を表示する
         else
-            failwith "File.DeleteTry"
+            let code = res.ReasonPhrase
+            let content = res.Content.ReadAsStringAsync().Result
+            failwith $"File.DeleteTry: {code}\n{content}"
 
 module Upload =
     let private fileExecute (dirId: string) (fileFullPath: string) : unit =
@@ -395,13 +380,6 @@ let ImportSettings () =
 
 module Lastupdated =
     let private filePath = $@"{Location}\lastupdated.tsv"
-
-    let private lineRegex =
-        System.Text.RegularExpressions.Regex(
-            "^(.*?)\t(.*?)\t(.*?)$",
-            System.Text.RegularExpressions.RegexOptions.Compiled
-        )
-
     /// テキストファイルの内容を辞書に変換する
     let Import () =
         if System.IO.File.Exists(filePath) then
@@ -409,14 +387,12 @@ module Lastupdated =
             while not streamReader.EndOfStream do
                 let line = streamReader.ReadLine()
                 if line <> "" then
-                    let ms = lineRegex.Matches line
-                    for m in ms do
-                        let path = m.Groups.[1].Value
-                        let id   = m.Groups.[2].Value
-                        let time = m.Groups.[3].Value
-                        LastupdatedDictionary.Add(path, {Src = line; Id = id; Time = time})
+                    let valueArray = line.Split("\t")
+                    let path = valueArray.[0]
+                    let id = valueArray.[1]
+                    let time = valueArray.[2]
+                    LastupdatedDictionary.Add(path, {Src = line; Id = id; Time = time})
             streamReader.Dispose()
-
     /// 最終更新日を記録したファイルを作成する
     let Export () : unit =
         let text = System.String.Join("\r\n", CurrentLastupdatedContent)
@@ -442,4 +418,4 @@ do
     Lastupdated.Export()
     DeleteNonexistent()
     // 終了
-    SetSuspendState(false, false, false) |> ignore
+    // SetSuspendState(false, false, false) |> ignore
